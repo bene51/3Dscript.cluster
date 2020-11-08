@@ -1,0 +1,100 @@
+#!/bin/bash
+
+# allocate 1 node (40 Cores / 80 SMT threads) with a GPU for 5 minutes:
+#
+#PBS -l nodes=1:ppn=40:anygpu,walltime=00:05:00
+#
+#
+# job name
+#PBS -N 3Dscript_
+#
+#
+# submit job array with job ids from 0 to 17. 18 jobs because the script
+# processes 18 images
+#PBS -t 0-17
+#
+
+
+#load required modules
+module load cuda
+module load gcc
+module load java
+# jobs always start in $HOME
+# change to work directory
+# cd  ${PBS_O_WORKDIR}
+
+# Requirements
+# ============
+#
+# Fiji installation
+# -----------------
+# wget -q https://downloads.imagej.net/fiji/latest/fiji-linux64.zip
+# unzip -q fiji-linux64.zip
+# rm fiji-linux64.zip
+# cd Fiji.app
+# ./ImageJ-linux64 --update add-update-site 3Dscript "https://romulus.oice.uni-erlangen.de/updatesite/"
+# ./ImageJ-linux64 --update add-update-site 3Dscript.server "https://romulus.oice.uni-erlangen.de/imagej/updatesites/3Dscript-server/"
+# ./ImageJ-linux64 --update update
+#
+# cd ..
+#
+# FFmpeg binary in the PATH
+# -------------------------
+# wget https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-amd64-static.tar.xz && \
+#     tar -xf ffmpeg-git-amd64-static.tar.xz && \
+#     mv ffmpeg-git-20200324-amd64-static ffmpeg && \
+#     rm ffmpeg-git-amd64-static.tar.xz
+
+# specify width of the output video
+width=600
+
+# specify height of the output video
+height=450
+
+# specify the host on which the OMERO server runs
+omerohost="euclid.oice.uni-erlangen.de"
+
+# specify the OMERO user
+omerouser="myuser"
+
+# specify the OMERO password
+omeropass="mypassword"
+
+# instead of omerouser/omeropass, you can also specify an OMERO session id
+session=
+
+# specify the OMERO image ids to render
+imageIds=(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18)
+
+# specify the 3Dscript animation script
+script="At frame 0 zoom by a factor of 0.9
+From frame 0 to frame 200 rotate by 360 degrees horizontally
+"
+
+
+# create the temporary folders for keeping intermediate results
+mkdir -p "$WORK/3Dscript.tmp"
+
+for i in ${!imageIds[@]}; do
+  basenames[i]=`mktemp -d -p $WORK/3Dscript.tmp --suffix=.${imageIds[i]}`
+done
+
+# base64-url-encode animation script and password
+# see https://stackoverflow.com/questions/58957358/how-to-encode-and-decode-data-in-base64-and-base64url-by-using-unix-commands
+encodedscript=`echo -n "$script" | tr -d '\r' | base64 -w 0 | sed 's/+/-/g; s/\//_/g'`
+encodedpass=`echo -n "$omeropass" | tr -d '\r' | base64 -w 0 | sed 's/+/-/g; s/\//_/g'`
+
+echo $encodedscript
+echo ${imageIds[@]}
+echo ${basenames[@]}
+
+image=${imageIds[${PBS_ARRAYID}]}
+basename=${basenames[${PBS_ARRAYID}]}
+
+if [ -z "$session" ]; then
+  session="$omerouser/$encodedpass"
+fi
+line="renderOMERO $omerohost $session $encodedscript $image $width $height basenames=$basename"
+
+PATH=~/ffmpeg:$PATH && ./Fiji.app/ImageJ-linux64 --console --ij2 --headless -eval "call(\"animation3d.server.server.Animation3DServer.oneTimeRender\", \"$line\"); print(\"fully done\"); /* exit(); run(\"Quit\"); */eval(\"script\", \"System.exit(0);\""
+
